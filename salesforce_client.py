@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Salesforce client — pulls deal context for a given account name.
-Uses the same credentials pattern as the DailyStandup repo.
+Salesforce client — parallel queries for deal context.
+EZPayments opps (Payfac stage) are secondary; main software opp is preferred.
 """
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from simple_salesforce import Salesforce
 
 
-def connect() -> Salesforce:
+def _sf() -> Salesforce:
     return Salesforce(
         username=os.environ.get("SF_USERNAME"),
         password=os.environ.get("SF_PASSWORD"),
@@ -17,107 +18,80 @@ def connect() -> Salesforce:
     )
 
 
-def get_opportunity(sf: Salesforce, account_name: str) -> dict | None:
-    """
-    Return the primary (software) opportunity for an account.
-    Prefers non-EZPayments opps — EZPayments is a separate payments opp
-    with $0 MRR and should not be treated as the main deal.
-    Falls back to most recent if only EZPayments exists.
-    """
-    safe = account_name.replace("'", "\\'")
-    results = sf.query_all(f"""
-        SELECT Id, Name, StageName, Monthly_Total__c, CloseDate,
-               Owner.Name, CreatedDate, Description, Type
-        FROM Opportunity
-        WHERE Account.Name LIKE '%{safe}%'
-        ORDER BY CreatedDate DESC
-    """)["records"]
-
-    if not results:
-        return None
-
-    # Prefer the main software opp over EZPayments
-    software_opps = [r for r in results if "ezpayment" not in (r.get("Name") or "").lower()
-                     and "payfac" not in (r.get("StageName") or "").lower()]
-    return software_opps[0] if software_opps else results[0]
-
-
-def get_all_opportunities(sf: Salesforce, account_name: str) -> list:
-    """Return all opportunities for an account — useful for full deal context."""
-    safe = account_name.replace("'", "\\'")
-    return sf.query_all(f"""
-        SELECT Id, Name, StageName, Monthly_Total__c, CloseDate,
-               Owner.Name, CreatedDate, Description
-        FROM Opportunity
-        WHERE Account.Name LIKE '%{safe}%'
-        ORDER BY CreatedDate DESC
-    """)["records"]
-
-
-def get_opportunity_history(sf: Salesforce, opp_id: str) -> list:
-    """Return stage history for an opportunity."""
-    results = sf.query_all(f"""
-        SELECT StageName, CreatedDate
-        FROM OpportunityHistory
-        WHERE OpportunityId = '{opp_id}'
-        ORDER BY CreatedDate ASC
-    """)["records"]
-    return results
-
-
-def get_contacts(sf: Salesforce, account_name: str) -> list:
-    """Return contacts associated with the account."""
-    safe = account_name.replace("'", "\\'")
-    results = sf.query_all(f"""
-        SELECT Name, Title, Email, Phone
-        FROM Contact
-        WHERE Account.Name LIKE '%{safe}%'
-        ORDER BY Name ASC
-        LIMIT 10
-    """)["records"]
-    return results
-
-
-def get_recent_tasks(sf: Salesforce, account_name: str, days_back: int = 90) -> list:
-    """Return recent tasks/activities logged against the account."""
-    safe = account_name.replace("'", "\\'")
-    results = sf.query_all(f"""
-        SELECT Subject, Status, Type, Owner.Name, CreatedDate, Description
-        FROM Task
-        WHERE What.Name LIKE '%{safe}%'
-        AND CreatedDate = LAST_N_DAYS:{days_back}
-        ORDER BY CreatedDate DESC
-        LIMIT 20
-    """)["records"]
-    return results
-
-
 def build_deal_context(account_name: str) -> dict:
     """
-    Return a structured dict of all SF deal context for an account.
-    Returns empty structure on any connection/query failure.
+    Fetch all SF deal context in parallel.
+    Returns opportunity, all_opportunities, stage_history, contacts, recent_tasks.
     """
     try:
-        sf   = connect()
-        opp  = get_opportunity(sf, account_name)
-        all_opps = get_all_opportunities(sf, account_name)
+        sf = _sf()
+        safe = account_name.replace("'", "\\'")
 
-        history  = get_opportunity_history(sf, opp["Id"]) if opp else []
-        contacts = get_contacts(sf, account_name)
-        tasks    = get_recent_tasks(sf, account_name)
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            f_opps     = ex.submit(_all_opps,    sf, safe)
+            f_contacts = ex.submit(_contacts,    sf, safe)
+            f_tasks    = ex.submit(_recent_tasks, sf, safe)
+            all_opps = f_opps.result()
+            contacts = f_contacts.result()
+            tasks    = f_tasks.result()
+
+        opp     = _primary_opp(all_opps)
+        history = _stage_history(sf, opp["Id"]) if opp else []
 
         return {
-            "opportunity":      opp,
+            "opportunity":       opp,
             "all_opportunities": all_opps,
-            "stage_history":    history,
-            "contacts":         contacts,
-            "recent_tasks":     tasks,
+            "stage_history":     history,
+            "contacts":          contacts,
+            "recent_tasks":      tasks,
         }
     except Exception as e:
         return {
-            "opportunity": None,
-            "stage_history": [],
-            "contacts": [],
-            "recent_tasks": [],
-            "error": str(e),
+            "opportunity": None, "all_opportunities": [],
+            "stage_history": [], "contacts": [],
+            "recent_tasks": [], "error": str(e),
         }
+
+
+def _all_opps(sf, safe_name: str) -> list:
+    return sf.query_all(f"""
+        SELECT Id, Name, StageName, Monthly_Total__c, CloseDate, Owner.Name, CreatedDate
+        FROM Opportunity
+        WHERE Account.Name LIKE '%{safe_name}%'
+        ORDER BY CreatedDate DESC
+    """)["records"]
+
+
+def _primary_opp(opps: list) -> dict | None:
+    """Prefer the main software opp over EZPayments."""
+    if not opps:
+        return None
+    software = [o for o in opps
+                if "ezpayment" not in (o.get("Name") or "").lower()
+                and "payfac"    not in (o.get("StageName") or "").lower()]
+    return software[0] if software else opps[0]
+
+
+def _stage_history(sf, opp_id: str) -> list:
+    return sf.query_all(f"""
+        SELECT StageName, CreatedDate FROM OpportunityHistory
+        WHERE OpportunityId = '{opp_id}' ORDER BY CreatedDate ASC
+    """)["records"]
+
+
+def _contacts(sf, safe_name: str) -> list:
+    return sf.query_all(f"""
+        SELECT Name, Title, Email, Phone FROM Contact
+        WHERE Account.Name LIKE '%{safe_name}%'
+        ORDER BY Name ASC LIMIT 10
+    """)["records"]
+
+
+def _recent_tasks(sf, safe_name: str) -> list:
+    return sf.query_all(f"""
+        SELECT Subject, Status, Type, Owner.Name, CreatedDate
+        FROM Task
+        WHERE What.Name LIKE '%{safe_name}%'
+        AND CreatedDate = LAST_N_DAYS:90
+        ORDER BY CreatedDate DESC LIMIT 10
+    """)["records"]
