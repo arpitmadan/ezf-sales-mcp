@@ -19,8 +19,16 @@ def build_timeline(account_name: str) -> dict:
     Return everything known about an account:
       - All Gong calls (chronological) with full transcripts
       - SF opportunity, stage history, contacts, recent tasks
+
+    Uses SF contact emails to match generic-titled Gong calls
+    ("EZFacility Demonstration", "Meeting with {Rep}", etc).
     """
-    calls = get_calls_for_account(account_name)
+    sf_context = build_deal_context(account_name)
+    contact_emails = [
+        c.get("Email") for c in sf_context.get("contacts", []) if c.get("Email")
+    ]
+
+    calls = get_calls_for_account(account_name, contact_emails=contact_emails)
     calls_sorted = sorted(calls, key=lambda c: c.get("started") or "")
 
     call_ids = [c["id"] for c in calls_sorted if c.get("id")]
@@ -42,8 +50,6 @@ def build_timeline(account_name: str) -> dict:
             "summary":    call_summary_line(call),
             "transcript": transcript_text,
         })
-
-    sf_context = build_deal_context(account_name)
 
     return {
         "account_name": account_name,
