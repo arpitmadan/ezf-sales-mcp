@@ -18,17 +18,40 @@ def connect() -> Salesforce:
 
 
 def get_opportunity(sf: Salesforce, account_name: str) -> dict | None:
-    """Return the most recent opportunity matching account_name."""
+    """
+    Return the primary (software) opportunity for an account.
+    Prefers non-EZPayments opps — EZPayments is a separate payments opp
+    with $0 MRR and should not be treated as the main deal.
+    Falls back to most recent if only EZPayments exists.
+    """
     safe = account_name.replace("'", "\\'")
     results = sf.query_all(f"""
+        SELECT Id, Name, StageName, Monthly_Total__c, CloseDate,
+               Owner.Name, CreatedDate, Description, Type
+        FROM Opportunity
+        WHERE Account.Name LIKE '%{safe}%'
+        ORDER BY CreatedDate DESC
+    """)["records"]
+
+    if not results:
+        return None
+
+    # Prefer the main software opp over EZPayments
+    software_opps = [r for r in results if "ezpayment" not in (r.get("Name") or "").lower()
+                     and "payfac" not in (r.get("StageName") or "").lower()]
+    return software_opps[0] if software_opps else results[0]
+
+
+def get_all_opportunities(sf: Salesforce, account_name: str) -> list:
+    """Return all opportunities for an account — useful for full deal context."""
+    safe = account_name.replace("'", "\\'")
+    return sf.query_all(f"""
         SELECT Id, Name, StageName, Monthly_Total__c, CloseDate,
                Owner.Name, CreatedDate, Description
         FROM Opportunity
         WHERE Account.Name LIKE '%{safe}%'
         ORDER BY CreatedDate DESC
-        LIMIT 1
     """)["records"]
-    return results[0] if results else None
 
 
 def get_opportunity_history(sf: Salesforce, opp_id: str) -> list:
@@ -75,18 +98,20 @@ def build_deal_context(account_name: str) -> dict:
     Returns empty structure on any connection/query failure.
     """
     try:
-        sf  = connect()
-        opp = get_opportunity(sf, account_name)
+        sf   = connect()
+        opp  = get_opportunity(sf, account_name)
+        all_opps = get_all_opportunities(sf, account_name)
 
         history  = get_opportunity_history(sf, opp["Id"]) if opp else []
         contacts = get_contacts(sf, account_name)
         tasks    = get_recent_tasks(sf, account_name)
 
         return {
-            "opportunity": opp,
-            "stage_history": history,
-            "contacts": contacts,
-            "recent_tasks": tasks,
+            "opportunity":      opp,
+            "all_opportunities": all_opps,
+            "stage_history":    history,
+            "contacts":         contacts,
+            "recent_tasks":     tasks,
         }
     except Exception as e:
         return {

@@ -73,23 +73,34 @@ def format_timeline_for_claude(timeline: dict) -> str:
     lines.append("")
 
     # SF deal context
-    if opp:
+    all_opps = sf.get("all_opportunities", [])
+    if all_opps:
+        lines.append("## Salesforce Opportunities")
+        for o in all_opps:
+            mrr   = o.get("Monthly_Total__c") or 0
+            stage = o.get("StageName", "Unknown")
+            name  = o.get("Name", "Unknown")
+            close = o.get("CloseDate", "")
+            owner = (o.get("Owner") or {}).get("Name", "Unknown")
+            lines.append(f"  [{name}]  Stage: {stage}  |  MRR: ${mrr:.0f}/mo  |  Close: {close}  |  {owner}")
+    elif opp:
         lines.append("## Salesforce Deal")
         lines.append(f"  Stage:    {opp.get('StageName', 'Unknown')}")
         lines.append(f"  MRR:      ${opp.get('Monthly_Total__c') or 0:.0f}/mo")
         lines.append(f"  Close:    {opp.get('CloseDate', 'Unknown')}")
         lines.append(f"  Owner:    {(opp.get('Owner') or {}).get('Name', 'Unknown')}")
-
-        history = sf.get("stage_history", [])
-        if history:
-            lines.append("  Stage History:")
-            for h in history:
-                lines.append(f"    {h.get('CreatedDate', '')[:10]}  →  {h.get('StageName')}")
     else:
         if sf.get("error"):
             lines.append(f"## Salesforce  (unavailable: {sf['error']})")
         else:
             lines.append("## Salesforce  (no opportunity found)")
+
+    if opp:
+        history = sf.get("stage_history", [])
+        if history:
+            lines.append(f"  Stage History ({opp.get('Name', 'primary opp')}):")
+            for h in history:
+                lines.append(f"    {h.get('CreatedDate', '')[:10]}  →  {h.get('StageName')}")
 
     contacts = sf.get("contacts", [])
     if contacts:
