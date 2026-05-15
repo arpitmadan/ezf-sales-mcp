@@ -1,12 +1,26 @@
 #!/bin/bash
 # EZFacility Sales MCP — one-command setup
-# Handles: venv, dependencies, credentials (.env), Claude Desktop config
+# Works on macOS and Windows (Git Bash)
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-CLAUDE_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 
-# ── Formatting helpers ──────────────────────────────────────────────────────
+# ── OS detection ─────────────────────────────────────────────────────────────
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
+  IS_WINDOWS=true
+  PYTHON_CMD="python"
+  VENV_ACTIVATE="$REPO_DIR/venv/Scripts/activate"
+  PYTHON_EXEC="$REPO_DIR/venv/Scripts/python.exe"
+  CLAUDE_CONFIG="$(cygpath -u "$APPDATA")/Claude/claude_desktop_config.json"
+else
+  IS_WINDOWS=false
+  PYTHON_CMD="python3"
+  VENV_ACTIVATE="$REPO_DIR/venv/bin/activate"
+  PYTHON_EXEC="$REPO_DIR/venv/bin/python"
+  CLAUDE_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+fi
+
+# ── Formatting helpers ────────────────────────────────────────────────────────
 bold()  { printf '\033[1m%s\033[0m' "$*"; }
 green() { printf '\033[32m%s\033[0m' "$*"; }
 red()   { printf '\033[31m%s\033[0m' "$*"; }
@@ -23,7 +37,7 @@ step() { echo ""; echo "  $(bold "→") $1"; }
 ok()   { echo "  $(green "✓") $1"; }
 warn() { echo "  $(red "!") $1"; }
 
-# ── Welcome ─────────────────────────────────────────────────────────────────
+# ── Welcome ───────────────────────────────────────────────────────────────────
 header "EZFacility Sales MCP Setup"
 echo ""
 echo "  This will set up the EZF Sales MCP on your computer."
@@ -32,36 +46,40 @@ echo ""
 echo "  $(dim "Press Enter to continue or Ctrl+C to cancel.")"
 read -r
 
-# ── Step 1: Python check ─────────────────────────────────────────────────────
+# ── Step 1: Python check ──────────────────────────────────────────────────────
 step "Checking Python..."
-if ! command -v python3 &>/dev/null; then
-  warn "Python 3 not found."
+if ! command -v "$PYTHON_CMD" &>/dev/null; then
+  warn "Python not found."
   echo ""
-  echo "  Please install Python from: https://www.python.org/downloads/"
-  echo "  Then run this setup again."
+  if [ "$IS_WINDOWS" = true ]; then
+    echo "  Please install Python from: https://www.python.org/downloads/"
+    echo "  IMPORTANT: During install, check 'Add Python to PATH' before clicking Install."
+  else
+    echo "  Please install Python from: https://www.python.org/downloads/"
+  fi
+  echo "  Then close this terminal, open a new one, and run setup again."
   echo ""
   exit 1
 fi
-PYTHON_VERSION=$(python3 --version 2>&1)
+PYTHON_VERSION=$("$PYTHON_CMD" --version 2>&1)
 ok "Found $PYTHON_VERSION"
 
-# ── Step 2: Virtual environment ──────────────────────────────────────────────
+# ── Step 2: Virtual environment ───────────────────────────────────────────────
 step "Creating Python environment..."
 cd "$REPO_DIR"
-python3 -m venv venv
-source venv/bin/activate
+"$PYTHON_CMD" -m venv venv
+source "$VENV_ACTIVATE"
 ok "Environment ready"
 
-# ── Step 3: Install packages ─────────────────────────────────────────────────
+# ── Step 3: Install packages ──────────────────────────────────────────────────
 step "Installing packages (this may take a minute)..."
 pip install --quiet --upgrade pip
 pip install --quiet -r requirements.txt
 ok "Packages installed"
 
-# ── Step 4: Credentials ─────────────────────────────────────────────────────
+# ── Step 4: Credentials ───────────────────────────────────────────────────────
 header "API Credentials"
 
-# Check for existing .env
 if [ -f "$REPO_DIR/.env" ]; then
   echo ""
   echo "  An existing .env file was found."
@@ -75,13 +93,12 @@ fi
 
 if [ "$SKIP_CREDS" != "true" ]; then
   echo ""
-  echo "  You'll need 4 things from Salesforce and 2 from Gong."
+  echo "  You'll need 2 things from Gong and 3 from Salesforce."
   echo "  $(dim "(Your input is hidden as you type — that's normal)")"
   echo ""
 
-  # Gong
   echo "  $(bold "Gong API")"
-  echo "  $(dim "Find these in Gong → Settings → API → Access Keys")"
+  echo "  $(dim "Ask @arpit on Slack for the Gong Access Key and Secret")"
   echo ""
   printf "  Gong Access Key:    "
   read -r GONG_KEY
@@ -90,10 +107,9 @@ if [ "$SKIP_CREDS" != "true" ]; then
   echo ""
   echo ""
 
-  # Salesforce
   echo "  $(bold "Salesforce")"
   echo "  $(dim "Your SF login email, password, and security token")"
-  echo "  $(dim "Security token: SF → Settings → Personal → Reset My Security Token")"
+  echo "  $(dim "Security token: SF → top-right avatar → Settings → Personal → Reset My Security Token")"
   echo ""
   printf "  SF Email:           "
   read -r SF_USER
@@ -105,13 +121,11 @@ if [ "$SKIP_CREDS" != "true" ]; then
   echo ""
   echo ""
 
-  # Validate nothing is empty
   if [ -z "$GONG_KEY" ] || [ -z "$GONG_SECRET" ] || [ -z "$SF_USER" ] || [ -z "$SF_PASS" ] || [ -z "$SF_TOKEN" ]; then
     warn "One or more credentials were left blank. Please run setup again."
     exit 1
   fi
 
-  # Write .env
   cat > "$REPO_DIR/.env" <<EOF
 GONG_ACCESS_KEY=$GONG_KEY
 GONG_ACCESS_SECRET=$GONG_SECRET
@@ -124,13 +138,21 @@ EOF
   ok "Credentials saved to .env"
 fi
 
-# ── Step 5: Claude Desktop config ───────────────────────────────────────────
+# ── Step 5: Claude Desktop config ────────────────────────────────────────────
 header "Claude Desktop Configuration"
 
-PYTHON_PATH="$REPO_DIR/venv/bin/python"
-SERVER_PATH="$REPO_DIR/server.py"
+# On Windows, Claude Desktop needs native Windows paths in the config
+if [ "$IS_WINDOWS" = true ]; then
+  CONFIG_PYTHON_PATH="$(cygpath -w "$PYTHON_EXEC")"
+  CONFIG_SERVER_PATH="$(cygpath -w "$REPO_DIR/server.py")"
+  # Use forward slashes (Claude Desktop on Windows accepts both)
+  CONFIG_PYTHON_PATH="${CONFIG_PYTHON_PATH//\\//}"
+  CONFIG_SERVER_PATH="${CONFIG_SERVER_PATH//\\//}"
+else
+  CONFIG_PYTHON_PATH="$PYTHON_EXEC"
+  CONFIG_SERVER_PATH="$REPO_DIR/server.py"
+fi
 
-# Detect if Claude Desktop config exists
 if [ ! -f "$CLAUDE_CONFIG" ]; then
   step "Claude Desktop config not found — creating it..."
   mkdir -p "$(dirname "$CLAUDE_CONFIG")"
@@ -138,8 +160,8 @@ if [ ! -f "$CLAUDE_CONFIG" ]; then
 {
   "mcpServers": {
     "ezf-sales": {
-      "command": "$PYTHON_PATH",
-      "args": ["$SERVER_PATH"]
+      "command": "$CONFIG_PYTHON_PATH",
+      "args": ["$CONFIG_SERVER_PATH"]
     }
   }
 }
@@ -147,15 +169,10 @@ EOF
   ok "Config created"
 else
   step "Updating Claude Desktop config..."
-
-  # Check if python3 (for json editing) and jq are available
-  if command -v python3 &>/dev/null; then
-    python3 - "$CLAUDE_CONFIG" "$PYTHON_PATH" "$SERVER_PATH" <<'PYEOF'
+  "$PYTHON_CMD" - "$CLAUDE_CONFIG" "$CONFIG_PYTHON_PATH" "$CONFIG_SERVER_PATH" <<'PYEOF'
 import sys, json
 
-config_path = sys.argv[1]
-python_path = sys.argv[2]
-server_path = sys.argv[3]
+config_path, python_path, server_path = sys.argv[1], sys.argv[2], sys.argv[3]
 
 with open(config_path, "r") as f:
     config = json.load(f)
@@ -168,31 +185,18 @@ config["mcpServers"]["ezf-sales"] = {
 
 with open(config_path, "w") as f:
     json.dump(config, f, indent=2)
-
-print("ok")
 PYEOF
-    ok "Claude Desktop config updated"
-  else
-    warn "Could not auto-update Claude Desktop config."
-    echo ""
-    echo "  Add this manually to: $CLAUDE_CONFIG"
-    echo ""
-    echo '  "ezf-sales": {'
-    echo "    \"command\": \"$PYTHON_PATH\","
-    echo "    \"args\": [\"$SERVER_PATH\"]"
-    echo '  }'
-    echo ""
-  fi
+  ok "Claude Desktop config updated"
 fi
 
-# ── Step 6: Quick validation ─────────────────────────────────────────────────
+# ── Step 6: Validate ──────────────────────────────────────────────────────────
 header "Validating Setup"
 
 step "Testing Python environment..."
-if "$REPO_DIR/venv/bin/python" -c "import mcp, requests, simple_salesforce, dotenv" 2>/dev/null; then
+if "$PYTHON_EXEC" -c "import mcp, requests, simple_salesforce, dotenv" 2>/dev/null; then
   ok "All packages installed correctly"
 else
-  warn "Package check failed. Try running: source venv/bin/activate && pip install -r requirements.txt"
+  warn "Package check failed. Try closing and reopening the terminal, then run setup again."
 fi
 
 step "Checking .env file..."
@@ -209,14 +213,14 @@ else
   warn "ezf-sales not found in Claude Desktop config — may need manual update"
 fi
 
-# ── Done ─────────────────────────────────────────────────────────────────────
+# ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "  $(green "✓ Setup complete!")"
 echo ""
 echo "  $(bold "Last step:") Quit and reopen Claude Desktop."
-echo "  Then type: $(bold "\"get account summary for Concord Swim\"")"
+echo "  Then type: $(bold "get account summary for Concord Swim")"
 echo "  to verify everything is working."
 echo ""
 echo "  $(dim "Need help? Slack @arpit")"
