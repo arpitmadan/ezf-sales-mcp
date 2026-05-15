@@ -1,7 +1,7 @@
 # EZFacility Sales MCP
 
 Connects Claude Desktop to your Gong call transcripts and Salesforce deals.
-Every role in the revenue org gets the right context for their job — without copy-pasting transcripts manually.
+Every role in the revenue org gets deal intelligence — without copy-pasting transcripts manually.
 
 ---
 
@@ -17,121 +17,89 @@ Every role in the revenue org gets the right context for their job — without c
 
 ---
 
-## Prerequisites
+## Setup
 
-- macOS (Windows support coming)
-- Python 3.10 or newer — check with `python3 --version`
+### Prerequisites
+
+- macOS
+- Python 3 — download from [python.org/downloads](https://www.python.org/downloads/) if you don't have it
 - Claude Desktop installed
 - Gong API credentials (from your Gong admin)
-- Salesforce credentials
+- Your Salesforce email, password, and security token
 
----
+### Step 1 — Download this folder
 
-## Setup (5 minutes)
+Click the green **Code** button above → **Download ZIP** → unzip it → you'll have a folder called `ezf-sales-mcp-main`.
 
-### Step 1 — Clone the repo
+### Step 2 — Open a terminal in that folder
 
-```bash
-git clone https://github.com/arpitmadan/ezf-sales-mcp.git
-cd ezf-sales-mcp
-```
+- On Mac: right-click the folder → **New Terminal at Folder**
+- In VS Code: open the folder, then press `` Ctrl+` ``
 
-### Step 2 — Run setup
+### Step 3 — Run setup
 
 ```bash
-chmod +x setup.sh
 ./setup.sh
 ```
 
-This creates a virtual environment and installs all dependencies.
+The script will:
+- Install everything automatically
+- Ask for your Gong and Salesforce credentials
+- Save them securely to a `.env` file on your machine
+- Update your Claude Desktop config
 
-### Step 3 — Add your credentials
+### Step 4 — Restart Claude Desktop
 
-```bash
-cp .env.example .env
-```
+Quit and reopen Claude Desktop. The EZF Sales tools will connect automatically.
 
-Open `.env` in any text editor and fill in:
-
-```
-GONG_ACCESS_KEY=        ← from Gong Settings → API
-GONG_ACCESS_SECRET=     ← from Gong Settings → API
-SF_USERNAME=            ← your Salesforce email
-SF_PASSWORD=            ← your Salesforce password
-SF_SECURITY_TOKEN=      ← Salesforce Settings → Reset Security Token
-```
-
-### Step 4 — Add to Claude Desktop
-
-Open `~/.claude/claude_desktop_config.json` (create it if it doesn't exist).
-
-Add `ezf-sales` inside the `mcpServers` block — replace `/path/to` with the actual folder path:
-
-```json
-{
-  "mcpServers": {
-    "ezf-sales": {
-      "command": "/path/to/ezf-sales-mcp/venv/bin/python",
-      "args": ["/path/to/ezf-sales-mcp/server.py"]
-    }
-  }
-}
-```
-
-> **Tip:** Run `./setup.sh` — it prints the exact config snippet with the correct paths for your machine.
-
-### Step 5 — Restart Claude Desktop
-
-Quit and reopen Claude Desktop. The EZF Sales tools will appear automatically.
+**Test it:** Type `get account summary for Concord Swim` in Claude.
 
 ---
 
 ## Available Tools
 
-| Tool | Use it when... |
+| Tool | When to use it |
 |---|---|
-| `get_account_timeline` | You need everything about an account |
-| `list_recent_calls` | You want a quick view of call activity |
-| `get_prep_brief` | Before any call — surfaces what was discussed before |
-| `get_followup_email_context` | After a call — drafts a personalized follow-up |
-| `get_deal_risk_signals` | A deal feels off — scan for red flags |
-| `get_rep_activity_summary` | Manager coaching / pipeline review |
-| `get_handoff_brief` | AM taking over an account |
-| `get_onboarding_context` | Onboarder getting up to speed |
-| `get_pipeline_call_activity` | Exec-level activity overview |
+| `get_account_summary` | Fast overview — deal stage, MRR, contacts, call list (no transcripts) |
+| `get_call_transcript` | Full transcript for a specific call (1 = most recent) |
+| `get_full_context` | Deep analysis — summary + all transcripts |
+| `list_recent_calls` | Quick view of call activity across the team |
+| `get_prep_brief` | Before a call — deal status + most recent transcript |
+| `get_followup_email` | After a call — drafts a personalized follow-up email |
+| `get_deal_risk` | A deal feels off — scans transcripts for red flags |
+| `get_pipeline_activity` | Manager/exec view of all call activity |
 
 ---
 
 ## Example Prompts
 
 ```
-What pain points did Granite State Indoor Range mention across all their calls?
+Get account summary for Granite State Indoor Range.
 
-Write a follow-up email for my call with ABC Fitness today.
+Write a follow-up email for my last call with ABC Fitness.
 
 What did we promise Riverside Fitness during the sales cycle?
 
 Show me risk signals in the Nuva Amenity deal.
 
-Give me a handoff brief for Mountain View Recreation — I'm their new AM.
+List all calls from the last 14 days.
 ```
 
 ---
 
 ## Notes
 
-- **Gong admin required** for API key generation. Ask your admin for a read-only key.
-- **Salesforce MCP users:** if you already have an SF MCP connected to Claude Desktop, you can skip the SF credentials — use this server for Gong and your existing SF MCP for deal data.
-- The `.env` file is gitignored and never committed. Each team member adds their own credentials.
+- **Your `.env` file is never committed to git.** Each person on the team uses their own credentials.
+- **Salesforce security token:** go to SF → top-right avatar → Settings → Personal → Reset My Security Token. It gets emailed to you.
+- **Gong API key:** ask your Gong admin to generate a read-only API key from Gong Settings → API.
 
 ---
 
 ## Team Setup
 
-Each team member:
-1. Clones the repo
-2. Runs `./setup.sh`
-3. Adds their own `.env` with their credentials
-4. Updates their Claude Desktop config
+Each person:
+1. Downloads the ZIP from GitHub
+2. Runs `./setup.sh` and enters their own credentials
+3. Restarts Claude Desktop
 
-One repo, everyone connects with their own keys.
+Questions? Slack @arpit.
