@@ -95,3 +95,76 @@ def _recent_tasks(sf, safe_name: str) -> list:
         AND CreatedDate = LAST_N_DAYS:90
         ORDER BY CreatedDate DESC LIMIT 10
     """)["records"]
+
+
+# ---------------------------------------------------------------------------
+# Batch lookups keyed by ID — for sweeping many accounts/opps at once
+# (e.g. the weekly product-gap report), instead of one lookup per account.
+# ---------------------------------------------------------------------------
+
+def get_accounts_by_id(account_ids: list) -> dict:
+    """
+    {account_id: {"name", "industry"}} for a batch of Account IDs.
+    Industry__c on the Account is often left blank by reps, even though the
+    original Lead that converted into it usually has Lead_Industry__c filled
+    in — so any account missing Industry__c is backfilled from its converted
+    Lead as a fallback.
+    """
+    ids = sorted({a for a in account_ids if a})
+    if not ids:
+        return {}
+    sf = _sf()
+    id_list = ",".join(f"'{i}'" for i in ids)
+    records = sf.query_all(f"""
+        SELECT Id, Name, Industry__c FROM Account WHERE Id IN ({id_list})
+    """)["records"]
+    result = {
+        r["Id"]: {"name": r.get("Name"), "industry": r.get("Industry__c")}
+        for r in records
+    }
+
+    missing = [aid for aid, a in result.items() if not a["industry"]]
+    if missing:
+        result.update(_backfill_industry_from_lead(sf, missing, result))
+
+    return result
+
+
+def _backfill_industry_from_lead(sf, account_ids: list, accounts: dict) -> dict:
+    id_list = ",".join(f"'{i}'" for i in account_ids)
+    leads = sf.query_all(f"""
+        SELECT ConvertedAccountId, Lead_Industry__c FROM Lead
+        WHERE ConvertedAccountId IN ({id_list}) AND Lead_Industry__c != null
+    """)["records"]
+    updated = dict(accounts)
+    for lead in leads:
+        aid = lead["ConvertedAccountId"]
+        updated[aid] = {**updated[aid], "industry": lead.get("Lead_Industry__c")}
+    return updated
+
+
+def get_opportunities_by_id(opportunity_ids: list) -> dict:
+    """
+    {opp_id: {"name", "stage", "mrr", "arr", "competitors_field"}} for a batch
+    of Opportunity IDs. arr excludes setup/activation fee (Annual_Revenue__c
+    is a formula field = Monthly_Total__c * 12; activation fee is separate).
+    """
+    ids = sorted({o for o in opportunity_ids if o})
+    if not ids:
+        return {}
+    sf = _sf()
+    id_list = ",".join(f"'{i}'" for i in ids)
+    records = sf.query_all(f"""
+        SELECT Id, Name, StageName, Monthly_Total__c, Annual_Revenue__c, Competitors__c
+        FROM Opportunity WHERE Id IN ({id_list})
+    """)["records"]
+    return {
+        r["Id"]: {
+            "name": r.get("Name"),
+            "stage": r.get("StageName"),
+            "mrr": r.get("Monthly_Total__c") or 0,
+            "arr": r.get("Annual_Revenue__c") or 0,
+            "competitors_field": r.get("Competitors__c"),
+        }
+        for r in records
+    }

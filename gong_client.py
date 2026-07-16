@@ -33,6 +33,7 @@ GENERIC_TITLES = {
 
 # Module-level cache: days_back → (timestamp, calls)
 _cache: dict = {}
+_users_cache: dict = {}   # {} or {"ts": ..., "users": [...]}
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +91,73 @@ def _get_all_calls(days_back: int = CALL_SEARCH_DAYS) -> list:
 
     _cache[days_back] = (now, calls)
     return calls
+
+
+# ---------------------------------------------------------------------------
+# Rep-based lookup (for team-wide sweeps, not tied to one account)
+# ---------------------------------------------------------------------------
+
+def _get_users() -> list:
+    """Gong workspace users, cached for the process lifetime — this list barely changes."""
+    if not _users_cache:
+        _users_cache["users"] = _get(f"{BASE_URL}/users", {}).get("users", [])
+    return _users_cache["users"]
+
+
+def resolve_rep_ids(rep_names: list) -> dict:
+    """Map rep full names (e.g. 'Shawn Tannenbaum') to their Gong primaryUserId."""
+    users = _get_users()
+    by_name = {
+        f"{u.get('firstName', '')} {u.get('lastName', '')}".strip().lower(): u.get("id")
+        for u in users
+    }
+    return {name: by_name.get(name.lower()) for name in rep_names}
+
+
+def get_calls_for_reps(rep_names: list, days_back: int = 7) -> list:
+    """All calls in the window where one of the given reps was the primary (host) user."""
+    ids = {uid for uid in resolve_rep_ids(rep_names).values() if uid}
+    all_calls = _get_all_calls(days_back)
+    matched = [c for c in all_calls if c.get("primaryUserId") in ids]
+    return sorted(matched, key=lambda c: c.get("started") or "")
+
+
+# ---------------------------------------------------------------------------
+# CRM context (Salesforce Account/Opportunity linked to a call by Gong's
+# native SF integration — far more reliable than title/email matching)
+# ---------------------------------------------------------------------------
+
+def get_crm_context_bulk(call_ids: list) -> dict:
+    """
+    Fetch Salesforce Account/Opportunity IDs + names linked to each call.
+    Returns {call_id: {"account_id", "account_name", "opportunity_id", "opportunity_name"}}.
+    """
+    if not call_ids:
+        return {}
+    result = {}
+    for i in range(0, len(call_ids), 50):
+        chunk = call_ids[i:i + 50]
+        data = _post(f"{BASE_URL}/calls/extensive", {
+            "filter": {"callIds": chunk},
+            "contentSelector": {"context": "Extended", "exposedFields": {"parties": True}},
+        })
+        for call in data.get("calls", []):
+            cid = (call.get("metaData") or {}).get("id")
+            entry = {"account_id": None, "account_name": None,
+                     "opportunity_id": None, "opportunity_name": None}
+            for system in (call.get("context") or []):
+                if system.get("system") != "Salesforce":
+                    continue
+                for obj in system.get("objects", []):
+                    fields = {f["name"]: f.get("value") for f in (obj.get("fields") or [])}
+                    if obj.get("objectType") == "Account":
+                        entry["account_id"] = obj.get("objectId")
+                        entry["account_name"] = fields.get("Name")
+                    elif obj.get("objectType") == "Opportunity":
+                        entry["opportunity_id"] = obj.get("objectId")
+                        entry["opportunity_name"] = fields.get("Name")
+            result[cid] = entry
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +236,46 @@ def _normalize(call: dict) -> dict:
 def _is_generic(title: str) -> bool:
     t = (title or "").lower().strip()
     return t in GENERIC_TITLES or t.startswith("meeting with") or t.startswith("sdr booked")
+
+
+def find_calls_by_contact_name(contact_name: str,
+                                days_back: int = CALL_SEARCH_DAYS) -> list:
+    """
+    Find calls by attendee name — for leads without a Salesforce account.
+    Title-matches first, then scans all remaining calls via the extensive
+    endpoint for a matching party name.
+    """
+    all_calls  = _get_all_calls(days_back)
+    name_lower = contact_name.lower().strip()
+
+    title_matched = [
+        c for c in all_calls
+        if name_lower in (c.get("title") or "").lower()
+    ]
+    title_ids = {c["id"] for c in title_matched}
+
+    remaining_ids = [c["id"] for c in all_calls if c.get("id") not in title_ids]
+    name_matched  = _name_match(remaining_ids, name_lower)
+
+    combined = title_matched + name_matched
+    return sorted(combined, key=lambda c: c.get("started") or "")
+
+
+def _name_match(call_ids: list, name_lower: str) -> list:
+    """Fetch extensive data for call IDs and match by attendee name."""
+    matched = []
+    for i in range(0, len(call_ids), 50):
+        chunk = call_ids[i:i + 50]
+        data  = _post(f"{BASE_URL}/calls/extensive", {
+            "filter":          {"callIds": chunk},
+            "contentSelector": {"context": "Extended", "exposedFields": {"parties": True}},
+        })
+        for call in data.get("calls", []):
+            for party in (call.get("parties") or []):
+                if name_lower in (party.get("name") or "").lower():
+                    matched.append(_normalize(call))
+                    break
+    return matched
 
 
 # ---------------------------------------------------------------------------

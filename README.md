@@ -14,6 +14,7 @@ Every role in the revenue org gets deal intelligence — without copy-pasting tr
 | **CEO** | "Show me all call activity from the last 30 days" |
 | **Account manager** | "Get me the full handoff brief for XYZ" |
 | **Onboarder** | "Why did Riverside Fitness buy and what did we promise?" |
+| **Product team** | "Run the weekly product gap report" |
 
 ---
 
@@ -39,7 +40,7 @@ Click the green **Code** button above → **Download ZIP** → unzip it → you'
 ### Step 3 — Run setup
 
 ```bash
-./setup.sh
+bash setup.sh
 ```
 
 The script will:
@@ -68,6 +69,8 @@ Quit and reopen Claude Desktop. The EZF Sales tools will connect automatically.
 | `get_followup_email` | After a call — drafts a personalized follow-up email |
 | `get_deal_risk` | A deal feels off — scans transcripts for red flags |
 | `get_pipeline_activity` | Manager/exec view of all call activity |
+| `get_product_gap_report` | Product team — scans the sales team's calls for missing-functionality signals to route to R&D |
+| `save_product_gap_report` | Persists the extracted table from `get_product_gap_report` to a local file |
 
 ---
 
