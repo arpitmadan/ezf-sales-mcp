@@ -70,7 +70,8 @@ Quit and reopen Claude Desktop. The EZF Sales tools will connect automatically.
 | `get_deal_risk` | A deal feels off — scans transcripts for red flags |
 | `get_pipeline_activity` | Manager/exec view of all call activity |
 | `get_product_gap_report` | Product team — scans the sales team's calls for missing-functionality signals to route to R&D |
-| `save_product_gap_report` | Persists the extracted table from `get_product_gap_report` to a local file |
+| `save_product_gap_report` | Appends the extracted table from `get_product_gap_report` to the running product-gap log |
+| `get_product_gap_history` | Product team — pull logged product gaps for a date range (quarter, half, year) without re-scanning Gong |
 
 ---
 

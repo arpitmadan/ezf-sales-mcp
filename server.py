@@ -7,17 +7,15 @@ Serves reps, managers, AMs, onboarders, and executives.
 from dotenv import load_dotenv
 load_dotenv()
 
-import os
 from mcp.server.fastmcp import FastMCP
 from account_timeline import get_summary, get_context, get_single_transcript
 from gong_client import _get_all_calls, call_line, find_calls_by_contact_name, get_transcript
-from product_gaps import build_report_prompt
+from product_gaps import build_report_prompt, append_report_rows, read_report_history
 from datetime import date, timedelta
 
 mcp = FastMCP("ezf-sales")
 
 SALES_TEAM = ["Shawn Tannenbaum", "Safwan Khan", "Dwayne Larson", "Arpit Madan"]
-REPORTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports", "product_gaps")
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +201,8 @@ def get_product_gap_report(days_back: int = 7) -> str:
     link, opportunity value, industry, competitor mentioned).
 
     For Delaney/Priyanka on the product team — after reading the table this
-    produces, call save_product_gap_report with the markdown table to persist it.
+    produces, call save_product_gap_report with the markdown table to append
+    it to the running log.
     """
     return build_report_prompt(SALES_TEAM, days_back)
 
@@ -211,16 +210,25 @@ def get_product_gap_report(days_back: int = 7) -> str:
 @mcp.tool()
 def save_product_gap_report(markdown_table: str, week_label: str = "") -> str:
     """
-    Save the product-gap table (from get_product_gap_report) to a local file
-    so it doesn't need to be re-run to look back at a prior week.
+    Append the product-gap table (from get_product_gap_report) to the running
+    log — one accumulating dataset across all weeks, not a file per week, so
+    it can be filtered by quarter/half/year later instead of stitched
+    together by hand. Rows are deduped by call + functionality, so re-running
+    the same week twice won't create duplicates.
     week_label: e.g. "2026-07-16" — defaults to today's date.
     """
-    os.makedirs(REPORTS_DIR, exist_ok=True)
     label = week_label or date.today().isoformat()
-    path = os.path.join(REPORTS_DIR, f"{label}.md")
-    with open(path, "w") as f:
-        f.write(markdown_table)
-    return f"Saved to {path}"
+    return append_report_rows(markdown_table, label)
+
+
+@mcp.tool()
+def get_product_gap_history(start_date: str = "", end_date: str = "") -> str:
+    """
+    Pull previously-saved product-gap rows for a date range, e.g. a quarter
+    ("2026-04-01", "2026-06-30") or a half/year — without re-scanning Gong.
+    Dates are call dates (YYYY-MM-DD); either bound can be left blank.
+    """
+    return read_report_history(start_date, end_date)
 
 
 if __name__ == "__main__":
