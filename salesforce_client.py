@@ -143,6 +143,35 @@ def _backfill_industry_from_lead(sf, account_ids: list, accounts: dict) -> dict:
     return updated
 
 
+def get_leads_by_email(emails: list) -> dict:
+    """
+    {email_lower: {"name", "company", "industry", "status"}} for unconverted
+    Leads matching the given attendee emails. This is the fallback path for
+    calls with a prospect who never became an Account/Opportunity — e.g. the
+    rep disqualified them ("Not a Good Fit") before any SF record beyond the
+    Lead was created. Gong's own CRM context can't find these (it only links
+    calls to an Account/Opportunity), so this is a direct Lead lookup.
+    """
+    addrs = sorted({e.lower() for e in emails if e})
+    if not addrs:
+        return {}
+    sf = _sf()
+    id_list = ",".join(f"'{a}'" for a in addrs)
+    records = sf.query_all(f"""
+        SELECT Name, Company, Lead_Industry__c, Status, Email
+        FROM Lead WHERE Email IN ({id_list})
+    """)["records"]
+    return {
+        r["Email"].lower(): {
+            "name": r.get("Name"),
+            "company": r.get("Company"),
+            "industry": r.get("Lead_Industry__c"),
+            "status": r.get("Status"),
+        }
+        for r in records if r.get("Email")
+    }
+
+
 def get_opportunities_by_id(opportunity_ids: list) -> dict:
     """
     {opp_id: {"name", "stage", "mrr", "arr", "competitors_field"}} for a batch

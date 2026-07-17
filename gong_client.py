@@ -129,8 +129,14 @@ def get_calls_for_reps(rep_names: list, days_back: int = 7) -> list:
 
 def get_crm_context_bulk(call_ids: list) -> dict:
     """
-    Fetch Salesforce Account/Opportunity IDs + names linked to each call.
-    Returns {call_id: {"account_id", "account_name", "opportunity_id", "opportunity_name"}}.
+    Fetch Salesforce Account/Opportunity IDs + names linked to each call, plus
+    external attendee emails. Gong's own SF sync only links calls to an
+    Account/Opportunity — a call with a Lead that never converted (no
+    Account/Opportunity exists yet) comes back with empty context, so
+    external_emails is included to let callers fall back to a direct Lead
+    lookup in Salesforce for those.
+    Returns {call_id: {"account_id", "account_name", "opportunity_id",
+    "opportunity_name", "external_emails", "external_names"}}.
     """
     if not call_ids:
         return {}
@@ -144,7 +150,8 @@ def get_crm_context_bulk(call_ids: list) -> dict:
         for call in data.get("calls", []):
             cid = (call.get("metaData") or {}).get("id")
             entry = {"account_id": None, "account_name": None,
-                     "opportunity_id": None, "opportunity_name": None}
+                     "opportunity_id": None, "opportunity_name": None,
+                     "external_emails": [], "external_names": []}
             for system in (call.get("context") or []):
                 if system.get("system") != "Salesforce":
                     continue
@@ -156,6 +163,12 @@ def get_crm_context_bulk(call_ids: list) -> dict:
                     elif obj.get("objectType") == "Opportunity":
                         entry["opportunity_id"] = obj.get("objectId")
                         entry["opportunity_name"] = fields.get("Name")
+            for party in (call.get("parties") or []):
+                if party.get("affiliation") == "External":
+                    if party.get("emailAddress"):
+                        entry["external_emails"].append(party["emailAddress"])
+                    if party.get("name"):
+                        entry["external_names"].append(party["name"])
             result[cid] = entry
     return result
 

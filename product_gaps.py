@@ -12,7 +12,7 @@ mentions in the transcript. That's not something to hardcode in Python.
 """
 
 from gong_client import get_calls_for_reps, get_crm_context_bulk, get_transcripts_bulk, call_line
-from salesforce_client import get_accounts_by_id, get_opportunities_by_id
+from salesforce_client import get_accounts_by_id, get_opportunities_by_id, get_leads_by_email
 
 PAYMENT_PROCESSING_MRR = 250  # every opp carries this in payment-processing revenue on top of software MRR
 
@@ -20,8 +20,15 @@ PAYMENT_PROCESSING_MRR = 250  # every opp carries this in payment-processing rev
 def build_report_packets(rep_names: list, days_back: int = 7) -> list:
     """
     One packet per call: {rep, date, url, account_name, industry, arr_total,
-    stage, transcript}. Calls with no linked SF Account are skipped — there's
-    no account to route a product gap back to.
+    stage, transcript}.
+
+    A deal that died before any Account/Opportunity existed — e.g. the rep
+    disqualified the lead ("Not a Good Fit") right after this call — is one
+    of the most useful signals for this report, not noise to drop. Gong's
+    own CRM context only links calls to an Account/Opportunity, so those
+    calls come back with empty context; they're matched to a Salesforce Lead
+    directly by attendee email instead. Only a call with truly no SF trace
+    at all (no Account, no Lead) falls back to Gong's own attendee data.
     """
     calls = get_calls_for_reps(rep_names, days_back)
     if not calls:
@@ -36,6 +43,12 @@ def build_report_packets(rep_names: list, days_back: int = 7) -> list:
     accounts = get_accounts_by_id(account_ids)
     opps = get_opportunities_by_id(opp_ids)
 
+    unlinked_emails = [
+        e for ctx in context.values() if not ctx.get("account_id")
+        for e in ctx.get("external_emails", [])
+    ]
+    leads = get_leads_by_email(unlinked_emails)
+
     rep_by_id = {v: k for k, v in _resolve_reps(rep_names).items()}
 
     packets = []
@@ -43,21 +56,38 @@ def build_report_packets(rep_names: list, days_back: int = 7) -> list:
         cid = c.get("id")
         ctx = context.get(cid, {})
         acct_id = ctx.get("account_id")
-        if not acct_id:
-            continue  # no SF account linked — nothing to route back to R&D
 
-        acct = accounts.get(acct_id, {})
-        opp = opps.get(ctx.get("opportunity_id"), {})
-        software_arr = opp.get("arr", 0)  # Annual_Revenue__c — excludes setup/activation fee
-        arr_total = software_arr + (PAYMENT_PROCESSING_MRR * 12) if software_arr else None
+        if acct_id:
+            acct = accounts.get(acct_id, {})
+            opp = opps.get(ctx.get("opportunity_id"), {})
+            software_arr = opp.get("arr", 0)  # Annual_Revenue__c — excludes setup/activation fee
+            arr_total = software_arr + (PAYMENT_PROCESSING_MRR * 12) if software_arr else None
+            account_name = acct.get("name") or ctx.get("account_name")
+            industry = acct.get("industry")
+            stage = opp.get("stage")
+        else:
+            lead = next(
+                (leads[e.lower()] for e in ctx.get("external_emails", []) if e.lower() in leads),
+                None,
+            )
+            arr_total = None
+            if lead:
+                account_name = lead.get("company") or lead.get("name")
+                industry = lead.get("industry")
+                stage = f"No opportunity — Lead status: {lead.get('status') or 'unknown'}"
+            else:
+                # No SF trace at all — best-effort name from the call itself.
+                account_name = (ctx.get("external_names") or [c.get("title") or "Unknown"])[0]
+                industry = None
+                stage = "Not found in Salesforce"
 
         packets.append({
             "rep": rep_by_id.get(c.get("primaryUserId"), "Unknown"),
             "date": (c.get("started") or "")[:10],
             "url": c.get("url"),
-            "account_name": acct.get("name") or ctx.get("account_name"),
-            "industry": acct.get("industry"),
-            "opportunity_stage": opp.get("stage"),
+            "account_name": account_name,
+            "industry": industry,
+            "opportunity_stage": stage,
             "arr_total": arr_total,
             "transcript": transcripts.get(cid, "(transcript not available)"),
         })
@@ -82,7 +112,7 @@ def build_report_prompt(rep_names: list, days_back: int = 7) -> str:
         "",
     ]
     for p in packets:
-        arr = f"${p['arr_total']:,.0f}" if p["arr_total"] else "unknown"
+        arr = f"${p['arr_total']:,.0f}" if p["arr_total"] else "N/A — no opportunity created"
         lines.append(f"## {p['account_name']}  |  {p['date']}  |  {p['rep']}")
         lines.append(
             f"Industry: {p['industry'] or 'unknown'}  |  "
