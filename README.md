@@ -91,6 +91,43 @@ List all calls from the last 14 days.
 
 ---
 
+## For the Product Team
+
+Weekly, ask Claude:
+
+```
+Run the product gap report for the last 7 days.
+```
+
+Claude will scan that week's Gong calls from the sales team, read every
+transcript, and hand back a table of specific missing-functionality moments —
+account, what was missing, the Gong call link, opportunity value (ARR +
+payment processing), industry, and any competitor mentioned. Then say:
+
+```
+Save that report.
+```
+
+This appends the table to a running log on your machine
+(`reports/product_gaps_log.csv`) with a `week_of` column, instead of
+overwriting anything — so it builds into a full history over time. Re-saving
+the same week twice won't create duplicate rows.
+
+To pull a rollup later — a quarter, half, or year — without re-scanning Gong:
+
+```
+Get the product gap history from 2026-04-01 to 2026-06-30.
+```
+
+**One thing to know:** `reports/product_gaps_log.csv` lives only on your own
+machine (it's git-ignored, like everyone's `.env`). If both of you run the
+weekly report independently, you'll each build your own separate log — they
+won't merge automatically. For now, simplest is to have one person run it
+each week and share the resulting CSV/table with the other; ping @arpit if
+you want this centralized instead (e.g. a shared sheet both of you can hit).
+
+---
+
 ## Notes
 
 - **Your `.env` file is never committed to git.** Each person on the team uses their own credentials.
