@@ -1,4 +1,4 @@
-mcp[cli]
+mcp[cli]==1.27.1
 requests
 python-dotenv
 simple-salesforce
