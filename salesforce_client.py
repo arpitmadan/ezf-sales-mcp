@@ -18,6 +18,20 @@ def _sf() -> Salesforce:
     )
 
 
+def _safe_result(future, default):
+    """
+    Resolve one future without letting its failure sink the other two.
+    Needed because not every Salesforce profile has read access to every
+    object queried here (e.g. Task is commonly locked down for non-sales
+    profiles) — a permission error on one query shouldn't blank out data
+    the caller *does* have access to.
+    """
+    try:
+        return future.result()
+    except Exception:
+        return default
+
+
 def build_deal_context(account_name: str) -> dict:
     """
     Fetch all SF deal context in parallel.
@@ -25,32 +39,36 @@ def build_deal_context(account_name: str) -> dict:
     """
     try:
         sf = _sf()
-        safe = account_name.replace("'", "\\'")
-
-        with ThreadPoolExecutor(max_workers=3) as ex:
-            f_opps     = ex.submit(_all_opps,    sf, safe)
-            f_contacts = ex.submit(_contacts,    sf, safe)
-            f_tasks    = ex.submit(_recent_tasks, sf, safe)
-            all_opps = f_opps.result()
-            contacts = f_contacts.result()
-            tasks    = f_tasks.result()
-
-        opp     = _primary_opp(all_opps)
-        history = _stage_history(sf, opp["Id"]) if opp else []
-
-        return {
-            "opportunity":       opp,
-            "all_opportunities": all_opps,
-            "stage_history":     history,
-            "contacts":          contacts,
-            "recent_tasks":      tasks,
-        }
     except Exception as e:
         return {
             "opportunity": None, "all_opportunities": [],
             "stage_history": [], "contacts": [],
             "recent_tasks": [], "error": str(e),
         }
+
+    safe = account_name.replace("'", "\\'")
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_opps     = ex.submit(_all_opps,    sf, safe)
+        f_contacts = ex.submit(_contacts,    sf, safe)
+        f_tasks    = ex.submit(_recent_tasks, sf, safe)
+        all_opps = _safe_result(f_opps, [])
+        contacts = _safe_result(f_contacts, [])
+        tasks    = _safe_result(f_tasks, [])
+
+    opp = _primary_opp(all_opps)
+    try:
+        history = _stage_history(sf, opp["Id"]) if opp else []
+    except Exception:
+        history = []
+
+    return {
+        "opportunity":       opp,
+        "all_opportunities": all_opps,
+        "stage_history":     history,
+        "contacts":          contacts,
+        "recent_tasks":      tasks,
+    }
 
 
 def _all_opps(sf, safe_name: str) -> list:
